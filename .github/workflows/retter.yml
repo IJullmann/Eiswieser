@@ -1,8 +1,8 @@
 name: Rettertueten-Check
 on:
   schedule:
-    - cron: "7 */2 * * *"   # alle 2 Stunden (Zeit in UTC)
-  workflow_dispatch:         # erlaubt manuellen Start
+    - cron: "7 */2 * * *"
+  workflow_dispatch:
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -11,14 +11,21 @@ jobs:
         run: |
           URL="https://shop.eiswieser.de/Lieblingsretter/RETTER.2"
           curl -sL -A "Mozilla/5.0" "$URL" -o page.html
-          echo "Seitengröße: $(wc -c < page.html) Bytes"
-          # Zum Anpassen: relevante Stellen ins Log schreiben
-          grep -ioE ".{0,120}(liebling|gro(ß|ss)|ausverkauft|nicht verf|warenkorb).{0,120}" page.html | head -40 || true
 
-          if grep -qiE "liebling|gro(ß|ss)" page.html && ! grep -qiE "ausverkauft|nicht verfügbar|nicht lieferbar" page.html; then
-            curl -s -H "Title: Rettertüte verfügbar!" -H "Click: $URL" -H "Tags: icecream" -H "Priority: high" \
-              -d "Liebling oder Groß gefunden: $URL" https://ntfy.sh/eiswieser-retter
+          echo "--- Verfügbarkeit (schema.org) ---"
+          grep -ioE 'schema.org/(InStock|OutOfStock|SoldOut|PreOrder|LimitedAvailability|Discontinued)' page.html | sort | uniq -c || true
+          echo "--- Kauf-Button ---"
+          grep -ioE '.{0,80}(btn-buy|in den warenkorb).{0,80}' page.html | head -5 || true
+          echo "--- Lieferhinweis ---"
+          grep -ioE '.{0,40}(delivery-information|ausverkauft|nicht verfügbar|nicht mehr verfügbar|sofort verfügbar|lieferzeit).{0,100}' page.html | head -10 || true
+          echo "--- Varianten ---"
+          grep -ioE '.{0,200}product-detail-configurator.{0,200}' page.html | head -20 || true
+          grep -ioE '(title|data-[a-z-]+)="[^"]*(liebling|gro(ß|ss))[^"]*"' page.html | sort -u | head -20 || true
+
+          if grep -qiE 'schema.org/(InStock|LimitedAvailability)' page.html && grep -qi 'btn-buy' page.html; then
+            curl -s -H "Title: Rettertüte Liebling verfügbar!" -H "Click: $URL" -H "Tags: icecream" -H "Priority: high" \
+              -d "Liebling ist bestellbar: $URL" https://ntfy.sh/eiswieser-retter
             echo "Benachrichtigung gesendet."
           else
-            echo "Nichts verfügbar."
+            echo "Liebling nicht verfügbar."
           fi
