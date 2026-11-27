@@ -1,31 +1,43 @@
 name: Rettertueten-Check
 on:
   schedule:
-    - cron: "7 */2 * * *"
+    # GitHub rechnet in UTC. 6-21 UTC deckt 8-22 Uhr deutsche Zeit (Winter und Sommer) ab,
+    # das Skript filtert unten auf gerade Stunden zwischen 8 und 22 Uhr.
+    - cron: "7 6-21 * * 1-5"
   workflow_dispatch:
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Seite prüfen
+      - name: Liebling und Gross pruefen
         run: |
-          URL="https://shop.eiswieser.de/Lieblingsretter/RETTER.2"
-          curl -sL -A "Mozilla/5.0" "$URL" -o page.html
+          H=$(TZ=Europe/Berlin date +%-H)
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "$H" -lt 8 ] || [ "$H" -gt 22 ] || [ $((H % 2)) -ne 0 ]; then
+              echo "Ausserhalb des Zeitfensters (Berlin: $H Uhr) - uebersprungen."
+              exit 0
+            fi
+          fi
 
-          echo "--- Verfügbarkeit (schema.org) ---"
-          grep -ioE 'schema.org/(InStock|OutOfStock|SoldOut|PreOrder|LimitedAvailability|Discontinued)' page.html | sort | uniq -c || true
-          echo "--- Kauf-Button ---"
-          grep -ioE '.{0,80}(btn-buy|in den warenkorb).{0,80}' page.html | head -5 || true
-          echo "--- Lieferhinweis ---"
-          grep -ioE '.{0,40}(delivery-information|ausverkauft|nicht verfügbar|nicht mehr verfügbar|sofort verfügbar|lieferzeit).{0,100}' page.html | head -10 || true
-          echo "--- Varianten ---"
-          grep -ioE '.{0,200}product-detail-configurator.{0,200}' page.html | head -20 || true
-          grep -ioE '(title|data-[a-z-]+)="[^"]*(liebling|gro(ß|ss))[^"]*"' page.html | sort -u | head -20 || true
+          FOUND=""
+          check() {
+            NAME="$1"; URL="$2"
+            curl -sL -A "Mozilla/5.0" "$URL" -o page.html
+            STATUS=$(grep -oiE 'schema.org/[A-Za-z]+' page.html | grep -iE 'stock|availab|order|sold|discont' | head -1)
+            if grep -qiE 'schema.org/(InStock|LimitedAvailability|PreOrder)' page.html && ! grep -q 'Nicht mehr verfügbar' page.html; then
+              echo "$NAME: VERFUEGBAR ($STATUS)"
+              FOUND="${FOUND}${NAME} ist bestellbar: ${URL}"$'\n'
+            else
+              echo "$NAME: nicht verfuegbar ($STATUS)"
+            fi
+          }
 
-          if grep -qiE 'schema.org/(InStock|LimitedAvailability)' page.html && grep -qi 'btn-buy' page.html; then
-            curl -s -H "Title: Rettertüte Liebling verfügbar!" -H "Click: $URL" -H "Tags: icecream" -H "Priority: high" \
-              -d "Liebling ist bestellbar: $URL" https://ntfy.sh/eiswieser-retter
+          check "Liebling" "https://shop.eiswieser.de/Lieblingsretter/RETTER.2"
+          check "Gross"    "https://shop.eiswieser.de/Grosser-Retter/RETTER.3"
+
+          if [ -n "$FOUND" ]; then
+            curl -s -H "Title: Rettertuete verfuegbar!" -H "Tags: icecream" -H "Priority: high" \
+              -H "Click: https://shop.eiswieser.de/Grosser-Retter/RETTER.3" \
+              -d "$FOUND" https://ntfy.sh/eiswieser-retter
             echo "Benachrichtigung gesendet."
-          else
-            echo "Liebling nicht verfügbar."
           fi
